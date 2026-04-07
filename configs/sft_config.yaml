@@ -1,0 +1,66 @@
+# ═══════════════════════════════════════════════════════════
+# SFT Configuration for Qwen3-4B Tool-Use Fine-Tuning
+# ═══════════════════════════════════════════════════════════
+
+# Model
+model_name: "Qwen/Qwen3-4B"
+model_cache_dir: "models/qwen3-4b"
+
+# Dataset
+dataset_name: "Salesforce/xlam-function-calling-60k"
+dataset_cache_dir: "data/sft_processed"
+train_size: 57000
+eval_size: 3000
+seed: 42
+
+# QLoRA
+load_in_4bit: true
+bnb_4bit_compute_dtype: "bfloat16"
+bnb_4bit_use_double_quant: true
+bnb_4bit_quant_type: "nf4"
+
+# LoRA sweep variants (RapidFire AI grid search)
+lora_target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+lora_dropout: 0.05
+lora_bias: "none"
+lora_task_type: "CAUSAL_LM"
+
+# Sweep over r and alpha (alpha always equals r)
+lora_r_values: [16, 32, 64]
+lora_alpha_values: [16, 32, 64]
+
+# SFT Training Arguments
+learning_rate: 2.0e-4
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 16
+num_train_epochs: 3
+warmup_ratio: 0.05
+lr_scheduler_type: "cosine"
+bf16: true
+tf32: true
+gradient_checkpointing: true
+max_seq_length: 2048
+packing: true
+logging_steps: 10
+eval_steps: 100
+save_steps: 200
+report_to: "wandb"
+
+# RapidFire AI
+experiment_name: "sft-qwen3-4b-tool-use"
+num_chunks: 4
+early_stop_threshold: 1.5  # Stop run if loss > 1.5x best at chunk 2
+
+# Output
+output_dir: "checkpoints/sft_runs"
+best_checkpoint_dir: "checkpoints/sft_best"
+
+# Liger kernel
+use_liger_kernel: true

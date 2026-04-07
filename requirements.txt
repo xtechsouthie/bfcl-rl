@@ -1,0 +1,33 @@
+# Core ML
+torch>=2.3.0
+unsloth
+trl>=0.15.0
+peft>=0.10.0
+transformers>=4.45.0
+accelerate>=0.30.0
+bitsandbytes>=0.43.0
+
+# Optimization
+liger-kernel>=0.3.0
+
+# Hyperparameter sweeps
+rapidfireai
+
+# Evaluation
+bfcl-eval
+
+# Inference / serving
+vllm>=0.4.0
+
+# Experiment tracking
+wandb>=0.17.0
+
+# Data
+datasets>=2.19.0
+huggingface-hub>=0.23.0
+
+# Utilities
+python-dotenv
+pyyaml
+numpy
+pandas
