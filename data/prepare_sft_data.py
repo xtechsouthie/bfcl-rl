@@ -28,51 +28,41 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from utils import load_config, resolve_path
 
 
-def parse_conversations(raw_conversations: str) -> List[Dict[str, str]]:
-    """Parse the `conversations` field from xlam into chat message dicts.
-
-    The xlam dataset stores conversations as a JSON string of
-    [{"from": "system", "value": "..."}, {"from": "human", "value": "..."},
-     {"from": "gpt", "value": "..."}, ...]
-
-    We convert to:
-    [{"role": "system", "content": "..."}, {"role": "user", "content": "..."},
-     {"role": "assistant", "content": "..."}, ...]
-    """
-    role_map = {
-        "system": "system",
-        "human": "user",
-        "gpt": "assistant",
-    }
-
-    if isinstance(raw_conversations, str):
-        convs = json.loads(raw_conversations)
-    else:
-        convs = raw_conversations
-
-    messages: List[Dict[str, str]] = []
-    for turn in convs:
-        role = role_map.get(turn.get("from", ""), turn.get("from", ""))
-        content = turn.get("value", "")
-        messages.append({"role": role, "content": content})
-
-    return messages
-
-
 def format_example(example: Dict[str, Any]) -> Dict[str, Any]:
-    """Format a single example into chat messages and count tool complexity."""
-    messages = parse_conversations(example["conversations"])
+    """Format a single example into chat messages and count tool complexity.
 
-    # Count number of tools for curriculum learning metadata
+    Schema: id | query (str) | answers (str, JSON) | tools (str, JSON)
+
+    We build a 3-turn conversation:
+      system    → tool definitions (from `tools`)
+      user      → the query
+      assistant → the tool call(s) (from `answers`)
+    """
     tools_str = example.get("tools", "[]")
+    answers_str = example.get("answers", "[]")
+    query = example.get("query", "")
+
+    # Parse tools for system prompt + num_tools count
     try:
         tools = json.loads(tools_str) if isinstance(tools_str, str) else tools_str
         num_tools = len(tools) if isinstance(tools, list) else 0
     except (json.JSONDecodeError, TypeError):
+        tools = []
         num_tools = 0
 
+    system_content = (
+        "You are a helpful assistant with access to the following tools:\n"
+        + json.dumps(tools, indent=2)
+    )
+
+    messages = [
+        {"role": "system",    "content": system_content},
+        {"role": "user",      "content": query},
+        {"role": "assistant", "content": answers_str},  # already a JSON string, keep as-is
+    ]
+
     return {
-        "messages": json.dumps(messages),  # Store as JSON string for HF dataset
+        "messages": json.dumps(messages),
         "num_tools": num_tools,
     }
 
