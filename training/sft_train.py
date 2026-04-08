@@ -221,7 +221,7 @@ def load_model_and_tokenizer(
         load_path,
         quantization_config=bnb_config,
         device_map="auto",
-        torch_dtype=compute_dtype,
+        dtype=compute_dtype,
         trust_remote_code=True,
     )
 
@@ -230,13 +230,46 @@ def load_model_and_tokenizer(
         trust_remote_code=True,
     )
 
-    # Unsloth or certain configs set the eos_token to a placeholder like "<EOS_TOKEN>"
-    # TRL 0.24+ strictly checks if eos_token is in the actual vocabulary.
-    # We must properly register whatever eos_token and pad_token are set to.
-    
-    # <|im_end|> is natively in the Qwen vocabulary. Point eos/pad to it to bypass TRL checks.
-    tokenizer.eos_token = "<|im_end|>"
-    tokenizer.pad_token = "<|im_end|>"
+    def _valid_token_from_id(token_id: Optional[int]) -> Optional[str]:
+        if token_id is None:
+            return None
+        token = tokenizer.convert_ids_to_tokens(token_id)
+        if token is None:
+            return None
+        token_back_id = tokenizer.convert_tokens_to_ids(token)
+        if token_back_id is None:
+            return None
+        if tokenizer.unk_token_id is not None and token_back_id == tokenizer.unk_token_id:
+            return None
+        return token
+
+    # TRL validates eos_token by token string; normalize to a real vocab token.
+    im_end_token = "<|im_end|>"
+    im_end_id = tokenizer.convert_tokens_to_ids(im_end_token)
+    if im_end_id is not None and (tokenizer.unk_token_id is None or im_end_id != tokenizer.unk_token_id):
+        eos_token = im_end_token
+        eos_token_id = im_end_id
+    else:
+        eos_token_id = tokenizer.eos_token_id
+        eos_token = _valid_token_from_id(eos_token_id)
+
+    if eos_token is None or eos_token_id is None:
+        raise ValueError("Could not resolve a valid EOS token from tokenizer vocabulary.")
+
+    tokenizer.eos_token = eos_token
+    tokenizer.eos_token_id = eos_token_id
+
+    pad_token = _valid_token_from_id(tokenizer.pad_token_id)
+    if pad_token is None:
+        tokenizer.pad_token = eos_token
+        tokenizer.pad_token_id = eos_token_id
+    else:
+        tokenizer.pad_token = pad_token
+
+    print(
+        f"Tokenizer special tokens: eos={tokenizer.eos_token} ({tokenizer.eos_token_id}), "
+        f"pad={tokenizer.pad_token} ({tokenizer.pad_token_id})"
+    )
 
     # Prepare for QLoRA
     model = prepare_model_for_kbit_training(model)
@@ -337,6 +370,8 @@ def train_single_run(
         seed=cfg.seed,
         dataloader_pin_memory=True,
         remove_unused_columns=False,
+        eos_token=tokenizer.eos_token,
+        pad_token=tokenizer.pad_token,
     )
 
     # ── Trainer ───────────────────────────────────────────────────────────
@@ -517,7 +552,7 @@ def _run_rapidfire_sweep(
             load_path,
             quantization_config=bnb_config,
             device_map="auto",
-            torch_dtype=compute_dtype,
+            dtype=compute_dtype,
             trust_remote_code=True,
         )
         model = prepare_model_for_kbit_training(model)
