@@ -2,7 +2,7 @@
 Prepare the Salesforce/xlam-function-calling-60k dataset for SFT training.
 
 - Shuffles the full dataset (mitigates model-generation bias)
-- Splits into train (57,000) and eval (3,000) sets
+- Splits into train (30,000) and eval (1,500) sets
 - Parses conversations into proper chat format
 - Saves processed dataset to data/sft_processed/
 
@@ -74,8 +74,8 @@ def prepare_sft_dataset(config: Dict[str, Any]) -> None:
     dataset_name: str = config.get("dataset_name", "Salesforce/xlam-function-calling-60k")
     cache_dir = resolve_path(config.get("dataset_cache_dir", "data/sft_processed"))
     raw_cache_dir = resolve_path("data/sft_raw_cache")
-    train_size: int = config.get("train_size", 57000)
-    eval_size: int = config.get("eval_size", 3000)
+    train_size: int = config.get("train_size", 30000)
+    eval_size: int = config.get("eval_size", 1500)
     seed: int = config.get("seed", 42)
 
     # ── Check for cached processed dataset ────────────────────────────────

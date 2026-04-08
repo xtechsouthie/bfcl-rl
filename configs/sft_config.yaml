@@ -1,16 +1,16 @@
 # ═══════════════════════════════════════════════════════════
-# SFT Configuration for Qwen3-4B Tool-Use Fine-Tuning
+# SFT Configuration for Qwen3-1.7B Tool-Use Fine-Tuning
 # ═══════════════════════════════════════════════════════════
 
 # Model
-model_name: "Qwen/Qwen3-4B"
-model_cache_dir: "models/qwen3-4b"
+model_name: "Qwen/Qwen3-1.7B"
+model_cache_dir: "models/qwen3-1.7b"
 
 # Dataset
 dataset_name: "Salesforce/xlam-function-calling-60k"
 dataset_cache_dir: "data/sft_processed"
-train_size: 57000
-eval_size: 3000
+train_size: 30000
+eval_size: 1500
 seed: 42
 
 # QLoRA
@@ -33,14 +33,14 @@ lora_bias: "none"
 lora_task_type: "CAUSAL_LM"
 
 # Sweep over r and alpha (alpha always equals r)
-lora_r_values: [16, 32, 64]
-lora_alpha_values: [16, 32, 64]
+lora_r_values: [16, 32]
+lora_alpha_values: [16, 32]
 
 # SFT Training Arguments
 learning_rate: 2.0e-4
 per_device_train_batch_size: 2
 gradient_accumulation_steps: 16
-num_train_epochs: 3
+num_train_epochs: 2
 warmup_ratio: 0.05
 lr_scheduler_type: "cosine"
 bf16: true
@@ -54,7 +54,7 @@ save_steps: 200
 report_to: "wandb"
 
 # RapidFire AI
-experiment_name: "sft-qwen3-4b-tool-use"
+experiment_name: "sft-qwen3-1.7b-tool-use"
 num_chunks: 4
 early_stop_threshold: 1.5  # Stop run if loss > 1.5x best at chunk 2
 

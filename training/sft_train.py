@@ -1,5 +1,5 @@
 """
-Phase 1 — SFT Training for Qwen3-4B Tool-Use.
+Phase 1 — SFT Training for Qwen3-1.7B Tool-Use.
 
 Uses:
   - Unsloth for QLoRA kernels
@@ -62,14 +62,14 @@ except Exception as e:
 class SFTRunConfig:
     """All SFT training configuration, loaded from YAML."""
     # Model
-    model_name: str = "Qwen/Qwen3-4B"
-    model_cache_dir: str = "models/qwen3-4b"
+    model_name: str = "Qwen/Qwen3-1.7B"
+    model_cache_dir: str = "models/qwen3-1.7b"
 
     # Dataset
     dataset_name: str = "Salesforce/xlam-function-calling-60k"
     dataset_cache_dir: str = "data/sft_processed"
-    train_size: int = 57000
-    eval_size: int = 3000
+    train_size: int = 30000
+    eval_size: int = 1500
     seed: int = 42
 
     # QLoRA
@@ -86,14 +86,14 @@ class SFTRunConfig:
     lora_dropout: float = 0.05
     lora_bias: str = "none"
     lora_task_type: str = "CAUSAL_LM"
-    lora_r_values: List[int] = field(default_factory=lambda: [16, 32, 64])
-    lora_alpha_values: List[int] = field(default_factory=lambda: [16, 32, 64])
+    lora_r_values: List[int] = field(default_factory=lambda: [16, 32])
+    lora_alpha_values: List[int] = field(default_factory=lambda: [16, 32])
 
     # Training
     learning_rate: float = 2e-4
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 16
-    num_train_epochs: int = 3
+    num_train_epochs: int = 2
     warmup_ratio: float = 0.05
     lr_scheduler_type: str = "cosine"
     bf16: bool = True
@@ -107,7 +107,7 @@ class SFTRunConfig:
     report_to: str = "wandb"
 
     # RapidFire AI
-    experiment_name: str = "sft-qwen3-4b-tool-use"
+    experiment_name: str = "sft-qwen3-1.7b-tool-use"
     num_chunks: int = 4
     early_stop_threshold: float = 1.5
 
@@ -180,7 +180,7 @@ def load_model_and_tokenizer(
     lora_r: int,
     lora_alpha: int,
 ) -> tuple:
-    """Load Qwen3-4B with QLoRA configuration and LoRA adapter.
+    """Load Qwen3-1.7B with QLoRA configuration and LoRA adapter.
 
     Returns (model, tokenizer).
     """
@@ -229,8 +229,14 @@ def load_model_and_tokenizer(
         load_path,
         trust_remote_code=True,
     )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+
+    # Unsloth or certain configs set the eos_token to a placeholder like "<EOS_TOKEN>"
+    # TRL 0.24+ strictly checks if eos_token is in the actual vocabulary.
+    # We must properly register whatever eos_token and pad_token are set to.
+    
+    # <|im_end|> is natively in the Qwen vocabulary. Point eos/pad to it to bypass TRL checks.
+    tokenizer.eos_token = "<|im_end|>"
+    tokenizer.pad_token = "<|im_end|>"
 
     # Prepare for QLoRA
     model = prepare_model_for_kbit_training(model)
@@ -303,18 +309,23 @@ def train_single_run(
     eval_ds = prepare_messages_for_training(eval_dataset, tokenizer)
 
     # ── SFT Config ────────────────────────────────────────────────────────
+    # Compute warmup_steps from ratio (warmup_ratio deprecated in transformers v5.2)
+    effective_batch = cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps
+    total_steps = (cfg.train_size // effective_batch) * cfg.num_train_epochs
+    warmup_steps = int(cfg.warmup_ratio * total_steps)
+
     sft_config = SFTConfig(
         output_dir=str(output_dir),
         learning_rate=cfg.learning_rate,
         per_device_train_batch_size=cfg.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.gradient_accumulation_steps,
         num_train_epochs=cfg.num_train_epochs,
-        warmup_ratio=cfg.warmup_ratio,
+        warmup_steps=warmup_steps,
         lr_scheduler_type=cfg.lr_scheduler_type,
         bf16=cfg.bf16,
         tf32=cfg.tf32,
         gradient_checkpointing=cfg.gradient_checkpointing,
-        max_seq_length=cfg.max_seq_length,
+        max_length=cfg.max_seq_length,
         packing=cfg.packing,
         logging_steps=cfg.logging_steps,
         eval_strategy="steps",
@@ -443,12 +454,13 @@ def _log_sample_outputs(
 def run_rapidfire_sweep(cfg: SFTRunConfig) -> None:
     """Run grid search over LoRA r/alpha using RapidFire AI.
 
-    Sweeps over r in {16, 32, 64} with alpha = r.
+    Sweeps over r in {16, 32} with alpha = r.
     Stops underperforming runs at chunk 2 if loss > 1.5x best.
     """
     try:
         from rapidfireai import Experiment
-        from rapidfireai.automl import List, RFGridSearch, RFLoraConfig, RFSFTConfig
+        from rapidfireai.search import RFGridSearch
+        from rapidfireai.automl import RFSFTConfig
         _use_rapidfire = True
     except ImportError:
         print("Warning: rapidfireai not installed -- falling back to manual grid search")
@@ -470,7 +482,8 @@ def _run_rapidfire_sweep(
     """Run sweep using the RapidFire AI Experiment / RFGridSearch API."""
     import shutil
     from rapidfireai import Experiment
-    from rapidfireai.automl import List, RFGridSearch, RFLoraConfig, RFSFTConfig
+    from rapidfireai.search import RFGridSearch
+    from rapidfireai.automl import RFSFTConfig
 
     # ── 1. Pre-process dataset messages (parse JSON strings -> dicts) ------
     print("Pre-processing dataset messages for RF sweep...")
@@ -482,9 +495,8 @@ def _run_rapidfire_sweep(
     eval_ready = eval_ds.map(_parse_messages, num_proc=4, desc="Prep eval")
 
     # ── 2. create_model_fn: called per config by RapidFire AI --------------
-    # RF resolves the grid and passes a config object with the chosen
-    # r / lora_alpha values already set.
-    def create_model_fn(rf_config: Any) -> Any:
+    # RF resolves the grid and passes each config as a plain dict.
+    def create_model_fn(config: Dict[str, Any]) -> Any:
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, BitsAndBytesConfig
 
@@ -510,9 +522,9 @@ def _run_rapidfire_sweep(
         )
         model = prepare_model_for_kbit_training(model)
 
-        # RF resolves List() values and injects them onto rf_config
-        chosen_r     = getattr(rf_config, "r", 32)
-        chosen_alpha = getattr(rf_config, "lora_alpha", chosen_r)
+        # RF passes the resolved grid values as a dict
+        chosen_r     = config.get("r", 32)
+        chosen_alpha = config.get("lora_alpha", chosen_r)
 
         lora_config = LoraConfig(
             r=chosen_r,
@@ -524,36 +536,36 @@ def _run_rapidfire_sweep(
         )
         return get_peft_model(model, lora_config)
 
-    # ── 3. Build RFGridSearch with List() for the r/alpha pairs ------------
-    # alpha always equals r; zip ensures we sweep paired values, not the
-    # full Cartesian product.
+    # ── 3. Build RFGridSearch with a dict (not kwargs) ---------------------
+    # alpha always equals r; zip ensures we sweep paired values.
     paired_r     = [r for r, a in zip(cfg.lora_r_values, cfg.lora_alpha_values) if r == a]
     paired_alpha = [a for r, a in zip(cfg.lora_r_values, cfg.lora_alpha_values) if r == a]
 
     output_dir = resolve_path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    grid = RFGridSearch(
-        lora_config=RFLoraConfig(
-            r=List(paired_r),
-            lora_alpha=List(paired_alpha),
-            target_modules=cfg.lora_target_modules,
-            lora_dropout=cfg.lora_dropout,
-            bias=cfg.lora_bias,
-            task_type=cfg.lora_task_type,
-        ),
-        sft_config=RFSFTConfig(
+    # Compute warmup_steps from ratio (warmup_ratio deprecated in transformers v5.2)
+    effective_batch = cfg.per_device_train_batch_size * cfg.gradient_accumulation_steps
+    total_steps = (cfg.train_size // effective_batch) * cfg.num_train_epochs
+    warmup_steps = int(cfg.warmup_ratio * total_steps)
+
+    grid = RFGridSearch({
+        # LoRA params to sweep — RF generates all combos from lists
+        "r": paired_r,
+        "lora_alpha": paired_alpha,
+        # SFT training config (static across all runs)
+        "sft_config": RFSFTConfig(
             output_dir=str(output_dir),
             learning_rate=cfg.learning_rate,
             per_device_train_batch_size=cfg.per_device_train_batch_size,
             gradient_accumulation_steps=cfg.gradient_accumulation_steps,
             num_train_epochs=cfg.num_train_epochs,
-            warmup_ratio=cfg.warmup_ratio,
+            warmup_steps=warmup_steps,
             lr_scheduler_type=cfg.lr_scheduler_type,
             bf16=cfg.bf16,
             tf32=cfg.tf32,
             gradient_checkpointing=cfg.gradient_checkpointing,
-            max_seq_length=cfg.max_seq_length,
+            max_length=cfg.max_seq_length,
             packing=cfg.packing,
             logging_steps=cfg.logging_steps,
             eval_strategy="steps",
@@ -561,9 +573,6 @@ def _run_rapidfire_sweep(
             save_strategy="steps",
             save_steps=cfg.save_steps,
             save_total_limit=3,
-            # Always save the best checkpoint based on eval_loss so the
-            # final model state is preserved even if training ends between
-            # two save_steps boundaries.
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
             greater_is_better=False,
@@ -571,7 +580,7 @@ def _run_rapidfire_sweep(
             seed=cfg.seed,
             remove_unused_columns=False,
         ),
-    )
+    })
 
     # ── 4. Create Experiment and run_fit -----------------------------------
     experiment = Experiment(
@@ -590,7 +599,6 @@ def _run_rapidfire_sweep(
         train_dataset=train_ready,
         eval_dataset=eval_ready,
         num_chunks=cfg.num_chunks,
-        early_stop_threshold=cfg.early_stop_threshold,
     )
 
     # ── 5. Copy best checkpoint to checkpoints/sft_best/ ------------------
@@ -602,13 +610,12 @@ def _run_rapidfire_sweep(
                 shutil.rmtree(best_dir)
             shutil.copytree(best_ckpt_path, str(best_dir))
             best_config = experiment.best_config()
-            print(f"Best checkpoint (r={getattr(best_config, 'r', '?')}) "
+            print(f"Best checkpoint (r={best_config.get('r', '?')}) "
                   f"saved to {best_dir}")
         else:
             print(f"RF did not return a best checkpoint path; "
                   f"check {output_dir} manually.")
     except AttributeError:
-        # Older RF versions may not expose best_config() / best_checkpoint_path()
         print("experiment.best_config() not available in this RF version; "
               "please pick the best run from the RF dashboard and copy it to "
               f"{best_dir} manually.")
