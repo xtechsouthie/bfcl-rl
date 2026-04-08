@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import importlib.metadata
 import os
 import platform
 import signal
@@ -76,18 +77,19 @@ def log_system_info() -> Dict[str, str]:
     if torch.cuda.is_available():
         info["cuda_version"] = torch.version.cuda or "N/A"
         info["gpu_model"] = torch.cuda.get_device_name(0)
-        vram_bytes = torch.cuda.get_device_properties(0).total_mem
+        vram_bytes = torch.cuda.get_device_properties(0).total_memory
         info["gpu_vram_gb"] = f"{vram_bytes / 1024**3:.1f}"
         info["gpu_count"] = str(torch.cuda.device_count())
 
-    # Optional package versions
+    # Optional package versions (metadata lookup avoids import side effects)
     for pkg in ("unsloth", "trl", "peft", "transformers", "accelerate",
                 "bitsandbytes", "liger_kernel", "vllm", "wandb"):
         try:
-            mod = __import__(pkg)
-            info[f"{pkg}_version"] = getattr(mod, "__version__", "installed")
-        except ImportError:
+            info[f"{pkg}_version"] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
             info[f"{pkg}_version"] = "not installed"
+        except Exception:
+            info[f"{pkg}_version"] = "installed"
 
     # Pretty print
     print("\n" + "═" * 60)

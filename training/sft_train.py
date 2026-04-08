@@ -1,5 +1,5 @@
 """
-Phase 1 — SFT Training for Qwen3-1.7B Tool-Use.
+Phase 1 — SFT Training for Qwen3-4B Tool-Use.
 
 Uses:
   - Unsloth for QLoRA kernels
@@ -180,7 +180,7 @@ def load_model_and_tokenizer(
     lora_r: int,
     lora_alpha: int,
 ) -> tuple:
-    """Load Qwen3-1.7B with QLoRA configuration and LoRA adapter.
+    """Load Qwen3-4B with QLoRA configuration and LoRA adapter.
 
     Returns (model, tokenizer).
     """
@@ -270,6 +270,7 @@ def load_model_and_tokenizer(
         f"Tokenizer special tokens: eos={tokenizer.eos_token} ({tokenizer.eos_token_id}), "
         f"pad={tokenizer.pad_token} ({tokenizer.pad_token_id})"
     )
+
 
     # Prepare for QLoRA
     model = prepare_model_for_kbit_training(model)
@@ -489,7 +490,7 @@ def _log_sample_outputs(
 def run_rapidfire_sweep(cfg: SFTRunConfig) -> None:
     """Run grid search over LoRA r/alpha using RapidFire AI.
 
-    Sweeps over r in {16, 32} with alpha = r.
+    Sweeps over r in {16, 32, 64} with alpha = r.
     Stops underperforming runs at chunk 2 if loss > 1.5x best.
     """
     try:
@@ -780,3 +781,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
